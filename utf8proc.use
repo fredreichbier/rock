@@ -1,0 +1,3 @@
+Name: utf8proc
+Description: utf8 handling for the ooc standard library
+Libs: -lutf8proc
