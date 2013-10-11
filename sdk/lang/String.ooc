@@ -1,3 +1,78 @@
+use utf8proc
+
+import lang/[Codepoint, IO]
+
+utf8proc_iterate: extern func (Octet*, SSizeT, Int32*) -> SSizeT
+utf8proc_decompose: extern func (Octet*, SSizeT, Int32*, SSizeT, Int) -> SSizeT
+utf8proc_reencode: extern func (Int32*, SSizeT, Int) -> SSizeT
+
+Utf8ProcOptions: enum {
+    NULLTERM =  (1<<0)
+    STABLE =    (1<<1)
+    COMPAT =    (1<<2)
+    COMPOSE =   (1<<3)
+    DECOMPOSE = (1<<4)
+    IGNORE =    (1<<5)
+    REJECTNA =  (1<<6)
+    NLF2LS =    (1<<7)
+    NLF2PS =    (1<<8)
+    NLF2LF =    (NLF2LS | NLF2PS)
+    STRIPCC =   (1<<9)
+    CASEFOLD =  (1<<10)
+    CHARBOUND = (1<<11)
+    LUMP =      (1<<12)
+    STRIPMARK = (1<<13)
+}
+
+/** Pretty much only a translated version of `utf8proc_map`, modified
+ * to use the boehm gc. The original utf8proc_map uses malloc and free
+ * and I don't see any options to customize them, so I figured this
+ * would be the cleanest solution.
+  */
+utf8proc_map_gc: func (str: Octet*, strlen: SSizeT, dstptr: Octet**, options: Int) -> SSizeT {
+    buffer: Int32*
+    result: SSizeT
+    dstptr@ = null
+    result = utf8proc_decompose(str, strlen, null, 0, options)
+    if(result < 0) return result
+    buffer = gc_malloc(result * Int32 size + 1)
+    if(!buffer) return -1 // UTF8PROC_ERROR_NOMEM
+    result = utf8proc_decompose(str, strlen, buffer, result, options)
+    if(result < 0) {
+        // TODO: free?
+        return result
+    }
+    result = utf8proc_reencode(buffer, result, options)
+    if(result < 0) {
+        // TODO: free?
+        return result
+    }
+    newptr: Int32* = gc_realloc(buffer, (result as SizeT) + 1) // TODO: Is this the NULL byte?
+    if(newptr) buffer = newptr
+    dstptr@ = buffer as Octet*
+    result
+}
+
+/** given a sequence of bytes, count all codepoints. That's probably slow,
+ * don't do it all day long. */
+countCodepoints: func (bytes: Buffer) -> SizeT {
+    remaining := bytes size
+    ptr := bytes data as Octet*
+    codepoints := 0
+    while(remaining > 0) {
+        current: Int32
+        bytesRead := utf8proc_iterate(ptr, remaining, current&)
+        if(bytesRead < 0) {
+            UnicodeError new(bytesRead) throw()
+        } else {
+            ptr += bytesRead
+            remaining -= bytesRead
+            codepoints += 1
+        }
+    }
+    codepoints
+}
+
 
 /**
  * The String class represents character strings.
@@ -5,43 +80,86 @@
  * The String class is immutable by default, this means every writing operation
  * is done on a clone, which is then returned
  */
-String: class extends Iterable<Char> {
-
-    /**
-     * Underlying buffer used to store a string's data.
-     * Avoid direct access, as it breaks immutability.
-     */
+String: class extends Iterable<Codepoint> {
     _buffer: Buffer
 
-    /** Size of this string, in bytes */
-    size: Int {
+    /** Does not copy. */
+    init: func ~fromBuffer (=_buffer) {
+    }
+
+    init: func ~fromCStr (s: CString) {
+        init(s, s length())
+    }
+
+    init: func ~fromCStrAndLength (s: CString, length: SizeT) {
+        _buffer = Buffer new(s, length)
+    }
+
+    /** Construct a UTF-8 string from a normal ooc String, which is interpreted
+     * as UTF-8. So, just the bytes are copied. */
+    init: func ~fromString (input: String) {
+        _buffer = input _buffer clone()
+    }
+
+    /** Read data from an array, does not copy. */
+    init: func ~fromArray (bytes: Octet[]) {
+        _buffer = Buffer new(bytes)
+    }
+
+    /** Read data from memory, does not copy. */
+    init: func ~fromMemory (memory: Octet*, size: SizeT) {
+        _buffer = Buffer new(memory as Char*, size) // TODO should not have to cast
+    }
+
+    map: func (options: Int) -> This {
+        newBytes: Int32*
+        newLength := utf8proc_map_gc(_buffer data as Octet*, _buffer size, newBytes&, options) // TODO dat cast
+        if(newLength < 0) {
+            UnicodeError new(newLength) throw()
+        }
+        This new(newBytes, newLength)
+    }
+
+    normalizeNFC: func -> This {
+        map((Utf8ProcOptions STABLE | Utf8ProcOptions COMPOSE | Utf8ProcOptions COMPAT) as Int)
+    }
+
+    normalizeNFD: func -> This {
+        map((Utf8ProcOptions STABLE | Utf8ProcOptions DECOMPOSE | Utf8ProcOptions COMPAT) as Int)
+    }
+
+    /** This is the number of stored codepoints. */
+    codepoints: SizeT {
+        get {
+            countCodepoints(_buffer)
+        }
+    }
+
+    /** This is the number of stored bytes (utf-8). */
+    size: SizeT {
         get {
             _buffer size
         }
     }
 
-    init: func ~withBuffer(=_buffer) {}
-
-    init: func ~withCStr (s: CString) {
-        init(s, s length())
-    }
-
-    init: func ~withCStrAndLength(s: CString, length: Int) {
-        _buffer = Buffer new(s, length)
-    }
-
-    length: func -> Int {
+    /** Typically, one needs to know the number of stored bytes,
+     * not codepoints. Thus, `length` returns the number of bytes. */
+    length: func -> SizeT {
         _buffer size
     }
 
-    equals?: final func (other: This) -> Bool {
+    clone: func -> This {
+        new(_buffer clone())
+    }
+
+    equals?: func (other: This) -> Bool {
         if(this == null) return (other == null)
         if(other == null) return false
         _buffer equals?(other _buffer)
     }
 
-    clone: func -> This {
-        new(_buffer clone())
+    iterator: func -> Iterator<Codepoint> {
+        Utf8StringIterator<Codepoint> new(this)
     }
 
     substring: func ~tillEnd (start: Int) -> This { substring(start, size) }
@@ -118,7 +236,7 @@ String: class extends Iterable<Char> {
         (_buffer clone()) replaceAll~char(oldie, kiddo). toString()
     }
     
-    map: func (f: Func (Char) -> Char) -> This {
+    map: func ~somethingElse (f: Func (Char) -> Char) -> This {
         (_buffer clone()) map(f). toString()
     }
 
@@ -255,11 +373,7 @@ String: class extends Iterable<Char> {
     toDouble: func -> Double                       { _buffer toDouble() }
     toLDouble: func -> LDouble                     { _buffer toLDouble() }
 
-    iterator: func -> BufferIterator<Char> {
-        _buffer iterator()
-    }
-
-    forward: func -> BufferIterator<Char> {
+    /*forward: func -> BufferIterator<Char> {
         _buffer forward()
     }
 
@@ -269,7 +383,7 @@ String: class extends Iterable<Char> {
 
     backIterator: func -> BufferIterator<Char> {
         _buffer backIterator()
-    }
+    }*/
 
     cformat: final func ~str (...) -> This {
         list: VaList
@@ -395,4 +509,33 @@ cStringPtrToStringPtr: func (cstr: CString*, len: Int) -> String* {
         toRet[i] = makeStringLiteral(cstr[i], cstr[i] length())
     }
     toRet
+}
+
+Utf8StringIterator: class <T> extends Iterator<Codepoint> {
+    bytesRead := 0
+    str: String
+
+    init: func ~withStr (=str) {
+    }
+
+    hasNext?: func -> Bool {
+        bytesRead < str _buffer size
+    }
+
+    next: func -> T {
+        // calculate the pointer to the current utf-8 code unit
+        ptr := str _buffer data as Octet* + bytesRead
+        current: Codepoint
+        bytesJustRead := utf8proc_iterate(ptr, str _buffer size - bytesRead, current&)
+        if(bytesJustRead < 0) {
+            UnicodeError new(bytesJustRead) throw()
+        } else {
+            bytesRead += bytesJustRead
+            current
+        }
+    }
+
+    remove: func -> Bool {
+        false // TODO
+    }
 }

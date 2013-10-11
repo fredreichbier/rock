@@ -13,7 +13,7 @@ for(i in 0..array length) {
 "" println()
 
 // this is "þØ¬"
-someString := Utf8String new("\xc3\xbe\xc3\x98\xc2\xac")
+someString := String new("\xc3\xbe\xc3\x98\xc2\xac")
 "%d bytes, %d codepoints" printfln(someString _buffer size, someString codepoints)
 
 for(cp in someString) {

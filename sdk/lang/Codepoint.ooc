@@ -1,8 +1,6 @@
 use utf8proc
 include utf8proc
 
-import lang/Utf8String
-
 UnicodeError: class extends Exception {
     init: func (.message) {
         super(message)
@@ -40,9 +38,9 @@ Codepoint: cover from Int32 {
         "U+%04X" format(this)
     }
 
-    toUtf8: func -> Utf8String {
+    toUtf8: func -> String {
         dest := Octet[4] new()
         bytesWritten := encodeToUtf8(dest)
-        Utf8String new(dest data, bytesWritten)
+        String new(dest data, bytesWritten)
     }
 }
