@@ -55,8 +55,8 @@ utf8proc_map_gc: func (str: Octet*, strlen: SSizeT, dstptr: Octet**, options: In
 
 /** given a sequence of bytes, count all codepoints. That's probably slow,
  * don't do it all day long. */
-countCodepoints: func (bytes: Octet[]) -> SizeT {
-    remaining := bytes length
+countCodepoints: func (bytes: Buffer) -> SizeT {
+    remaining := bytes size
     ptr := bytes data as Octet*
     codepoints := 0
     while(remaining > 0) {
@@ -74,28 +74,44 @@ countCodepoints: func (bytes: Octet[]) -> SizeT {
 }
 
 Utf8String: class extends Iterable<Codepoint> {
-    bytes: Octet[]
-    codepoints: SizeT
+    _buffer: Buffer
+
+    /** Does not copy. */
+    init: func ~fromBuffer (=_buffer) {
+    }
 
     /** Construct a UTF-8 string from a normal ooc String, which is interpreted
      * as UTF-8. So, just the bytes are copied. */
     init: func ~fromString (input: String) {
-        bytes length = input size
-        bytes data = gc_malloc(bytes length * Octet size)
-        memcpy(bytes data, input _buffer data, bytes length)
-        init(bytes)
+        _buffer = input _buffer clone()
     }
 
     /** Read data from an array, does not copy. */
-    init: func ~fromArray (=bytes) {
-        codepoints = countCodepoints(bytes)
+    init: func ~fromArray (bytes: Octet[]) {
+        _buffer = Buffer new(bytes)
     }
 
     /** Read data from memory, does not copy. */
     init: func ~fromMemory (memory: Octet*, size: SizeT) {
-        bytes length = size
-        bytes data = memory
-        init(bytes)    
+        _buffer = Buffer new(memory as Char*, size) // TODO should not have to cast
+    }
+
+    /** This is the number of stored codepoints. */
+    codepoints: SizeT {
+        get {
+            countCodepoints(_buffer)
+        }
+    }
+
+    /** This is the number of stored bytes (utf-8). */
+    size: SizeT {
+        get {
+            _buffer size
+        }
+    }
+
+    clone: func -> This {
+        new(_buffer clone())
     }
 
     iterator: func -> Iterator<Codepoint> {
@@ -103,7 +119,7 @@ Utf8String: class extends Iterable<Codepoint> {
     }
 
     print: func {
-        fwrite(bytes data, 1, bytes length, stdout)
+        fwrite(_buffer data, 1, _buffer size, stdout)
     }
 
     println: func {
@@ -112,16 +128,14 @@ Utf8String: class extends Iterable<Codepoint> {
     }
 
     equals?: func (other: This) -> Bool {
-        if(this bytes length != other bytes length) {
-            false
-        } else {
-            memcmp(this bytes data, other bytes data, this bytes length) == 0
-        }
+        if(this == null) return (other == null)
+        if(other == null) return false
+        _buffer equals?(other _buffer)
     }
 
     map: func (options: Int) -> This {
         newBytes: Int32*
-        newLength := utf8proc_map_gc(bytes data, bytes length, newBytes&, options)
+        newLength := utf8proc_map_gc(_buffer data as Octet*, _buffer size, newBytes&, options) // TODO dat cast
         if(newLength < 0) {
             UnicodeError new(newLength) throw()
         }
@@ -145,14 +159,14 @@ Utf8StringIterator: class <T> extends Iterator<Codepoint> {
     }
 
     hasNext?: func -> Bool {
-        bytesRead < str bytes length
+        bytesRead < str _buffer size
     }
 
     next: func -> T {
         // calculate the pointer to the current utf-8 code unit
-        ptr := str bytes data as Octet* + bytesRead
+        ptr := str _buffer data as Octet* + bytesRead
         current: Codepoint
-        bytesJustRead := utf8proc_iterate(ptr, str bytes length - bytesRead, current&)
+        bytesJustRead := utf8proc_iterate(ptr, str _buffer size - bytesRead, current&)
         if(bytesJustRead < 0) {
             UnicodeError new(bytesJustRead) throw()
         } else {

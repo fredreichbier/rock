@@ -50,6 +50,16 @@ Buffer: class extends Iterable<Char> {
     }
 
     /**
+     * Create a new buffer from an octet array. Does not copy data.
+     */
+    init: func ~array (array: Octet[]) {
+        data = array data as Octet* // TODO nasty casty
+        size = array length
+        capacity = array length
+        mallocAddr = array data
+    }
+
+    /**
      * Create a new String from a zero-terminated C String with known length
      * optional flag for stringliteral initializaion with zero copying
      */

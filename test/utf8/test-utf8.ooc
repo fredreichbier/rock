@@ -14,7 +14,7 @@ for(i in 0..array length) {
 
 // this is "þØ¬"
 someString := Utf8String new("\xc3\xbe\xc3\x98\xc2\xac")
-"%d bytes, %d codepoints" printfln(someString bytes length, someString codepoints)
+"%d bytes, %d codepoints" printfln(someString _buffer size, someString codepoints)
 
 for(cp in someString) {
     "Got codepoint: %s which is: " printf(cp toDescription())

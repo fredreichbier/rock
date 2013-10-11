@@ -5,7 +5,7 @@ a := Utf8String new("\xc3\xb1")
 b := Utf8String new("n\xcc\x83")
 
 evilToString: func (u: Utf8String) -> String {
-    String new(u bytes data, u bytes length)
+    String new(u _buffer)
 }
 
 compareStuff: func (a, b: Utf8String) {
